@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Device Flow — 1Quantum Auth</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Device Flow</h1>
+    <div class="card">
+      <button id="startBtn" class="btn">Start Device Flow</button>
+      <div id="deviceInfo" style="display:none;">
+        <p><strong>User code:</strong> <span id="userCode"></span></p>
+        <p><strong>Verification URL:</strong> <a id="verificationUri" href="#" target="_blank"></a></p>
+        <p id="instructions">Open the verification URL in another browser and enter the user code, then wait here while we poll for completion.</p>
+        <p><strong>Polling status:</strong> <span id="status">idle</span></p>
+        <pre id="result"></pre>
+      </div>
+      <p><a href="/">Back</a></p>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
