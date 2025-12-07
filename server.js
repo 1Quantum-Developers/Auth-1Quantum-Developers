@@ -1,7 +1,20 @@
+/**
+ * server.js
+ *  - GitHub OAuth (web redirect) entry: /login -> GitHub -> /callback (redirects to callback.html)
+ *  - Server-side exchange endpoint: POST /exchange (used by public/callback.html)
+ *  - Optional server-side callback renderer: GET /callback-server (exchanges code and returns HTML)
+ *  - Device flow: POST /device/start and POST /device/poll
+ *
+ * Notes:
+ *  - Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in environment (Render / .env)
+ *  - REDIRECT_URI should match the OAuth app callback (default below)
+ *  - Do NOT commit secrets to repo for production
+ */
 const express = require('express');
 const axios = require('axios');
 const path = require('path');
 const crypto = require('crypto');
+const { URL } = require('url');
 require('dotenv').config();
 
 const app = express();
@@ -17,29 +30,47 @@ if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
   console.warn('Warning: GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET not found in env. Falling back to provided defaults. For production, set env variables and do not commit secrets.');
 }
 
+// Serve static files from /public
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Simple in-memory state store for demo (not for production)
+// In-memory state store for demo (not for production)
 const stateStore = new Map();
 
-// Start regular OAuth web flow
+// Helper: create authorize URL for web OAuth
+function buildAuthorizeUrl(state, scope = 'read:user user:email') {
+  const params = new URLSearchParams({
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    scope,
+    state
+  });
+  return `https://github.com/login/oauth/authorize?${params.toString()}`;
+}
+
+// Start standard web OAuth flow
 app.get('/login', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   stateStore.set(state, Date.now());
-  const scope = 'read:user user:email';
-  const authorizeUrl = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`;
+  const authorizeUrl = buildAuthorizeUrl(state);
   res.redirect(authorizeUrl);
 });
 
-// OAuth callback (server-side exchange) — keeps existing behavior for server-side flow
-app.get('/callback', async (req, res) => {
+// Primary callback endpoint used in OAuth app: preserve query and redirect to static callback page
+// This ensures GitHub's redirect will land on /callback and the browser will be forwarded to /callback.html
+app.get('/callback', (req, res) => {
+  // preserve original query string (code, state)
+  const qs = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  return res.redirect('/callback.html' + qs);
+});
+
+// Optional: direct server-side exchange and render result (useful for testing or if you prefer server render).
+// You can configure your OAuth app to use /callback-server as the callback if you want server-side rendering.
+app.get('/callback-server', async (req, res) => {
   const { code, state } = req.query;
-  if (!code) {
-    return res.status(400).send('Missing code');
-  }
+  if (!code) return res.status(400).send('Missing code');
   if (!state || !stateStore.has(state)) {
-    console.warn('State missing or unknown:', state);
-    // proceed but warn; in production you should reject
+    console.warn('State missing or unknown (callback-server):', state);
+    // For demo we continue, but for security you should reject this request.
   } else {
     stateStore.delete(state);
   }
@@ -47,13 +78,13 @@ app.get('/callback', async (req, res) => {
   try {
     const tokenResp = await axios.post(
       'https://github.com/login/oauth/access_token',
-      {
+      new URLSearchParams({
         client_id: CLIENT_ID,
         client_secret: CLIENT_SECRET,
         code,
         redirect_uri: REDIRECT_URI
-      },
-      { headers: { Accept: 'application/json' } }
+      }).toString(),
+      { headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
 
     const tokenData = tokenResp.data;
@@ -61,17 +92,16 @@ app.get('/callback', async (req, res) => {
       return res.status(400).json(tokenData);
     }
     const accessToken = tokenData.access_token;
-    // Fetch user
+
     const userResp = await axios.get('https://api.github.com/user', {
       headers: { Authorization: `token ${accessToken}`, Accept: 'application/json', 'User-Agent': '1Quantum-Auth-Demo' }
     });
     const user = userResp.data;
 
-    // Serve a friendly HTML page showing user info (server-side)
     return res.send(`
       <!doctype html>
       <html>
-      <head><meta charset="utf-8"><title>Auth callback</title>
+      <head><meta charset="utf-8"><title>Callback - Server</title>
         <meta name="viewport" content="width=device-width,initial-scale=1">
         <style>
           body{font-family:system-ui,Arial;padding:24px;background:#f4f6fb}
@@ -91,19 +121,20 @@ app.get('/callback', async (req, res) => {
       </html>
     `);
   } catch (err) {
-    console.error('Callback error', err.response ? err.response.data : err.message);
+    console.error('callback-server error', err.response ? err.response.data : err.message);
     return res.status(500).send('Authentication failed');
   }
 });
 
-// New endpoint: client-side exchange for static callback page.
-// The static callback page can POST code/state here to complete the exchange server-side.
+// Client-side exchange endpoint: public/callback.html will POST code+state here.
+// Server performs token exchange using the client secret (kept on server) and returns JSON (token + user).
 app.post('/exchange', async (req, res) => {
   const { code, state } = req.body;
   if (!code) return res.status(400).json({ error: 'missing_code' });
+
   if (!state || !stateStore.has(state)) {
     console.warn('State missing or unknown (exchange):', state);
-    // For demo we allow it, but in production reject the request
+    // For demo allow it; in production you should reject the request or verify session state.
   } else {
     stateStore.delete(state);
   }
@@ -111,13 +142,13 @@ app.post('/exchange', async (req, res) => {
   try {
     const tokenResp = await axios.post(
       'https://github.com/login/oauth/access_token',
-      {
+      new URLSearchParams({
         client_id: CLIENT_ID,
         client_secret: CLIENT_SECRET,
         code,
         redirect_uri: REDIRECT_URI
-      },
-      { headers: { Accept: 'application/json' } }
+      }).toString(),
+      { headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
 
     const tokenData = tokenResp.data;
@@ -137,7 +168,7 @@ app.post('/exchange', async (req, res) => {
   }
 });
 
-// Device flow start (client calls this)
+// Device Flow: start - requests device/user codes from GitHub
 app.post('/device/start', async (req, res) => {
   const scope = req.body.scope || 'read:user user:email';
   try {
@@ -146,6 +177,7 @@ app.post('/device/start', async (req, res) => {
       new URLSearchParams({ client_id: CLIENT_ID, scope }).toString(),
       { headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
+    // Response: device_code, user_code, verification_uri, expires_in, interval
     res.json(resp.data);
   } catch (err) {
     console.error('Device/start error', err.response ? err.response.data : err.message);
@@ -153,7 +185,7 @@ app.post('/device/start', async (req, res) => {
   }
 });
 
-// Device flow poll: client repeatedly calls this endpoint with device_code
+// Device Flow: poll - exchange device_code for access_token (called repeatedly by client)
 app.post('/device/poll', async (req, res) => {
   const { device_code } = req.body;
   if (!device_code) return res.status(400).json({ error: 'device_code_required' });
@@ -168,13 +200,16 @@ app.post('/device/poll', async (req, res) => {
       }).toString(),
       { headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
+
     const data = resp.data;
+    // If access_token present, fetch user and return success
     if (data.access_token) {
       const userResp = await axios.get('https://api.github.com/user', {
         headers: { Authorization: `token ${data.access_token}`, Accept: 'application/json', 'User-Agent': '1Quantum-Auth-Demo' }
       });
       return res.json({ success: true, tokenData: data, user: userResp.data });
     }
+    // Otherwise forward transient errors like authorization_pending, slow_down, expired_token, etc.
     return res.json({ success: false, data });
   } catch (err) {
     console.error('Device/poll error', err.response ? err.response.data : err.message);
@@ -182,7 +217,13 @@ app.post('/device/poll', async (req, res) => {
   }
 });
 
+// Root health-check
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.listen(PORT, () => {
   console.log(`Auth server listening on port ${PORT}`);
   console.log(`Web login: http://localhost:${PORT}/login`);
+  console.log(`Configured REDIRECT_URI: ${REDIRECT_URI}`);
 });
