@@ -1,188 +1,103 @@
-const express = require('express');
-const axios = require('axios');
-const path = require('path');
-const crypto = require('crypto');
-require('dotenv').config();
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Callback — 1Quantum Auth</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .muted { color: #6b7280 }
+    .small { font-size: 0.9rem }
+    .center { text-align: center }
+    img.avatar { border-radius: 8px; width: 72px; height: 72px; object-fit: cover; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Completing sign-in</h1>
+    <div class="card">
+      <p class="muted">This page will exchange the code for a token via the server.</p>
+      <div id="status"><em>Parsing callback parameters...</em></div>
 
-const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+      <div id="user" style="display:none" class="center">
+        <img id="avatar" class="avatar" src="" alt="avatar"/>
+        <h2 id="username"></h2>
+        <pre id="userinfo" style="max-height:300px;overflow:auto"></pre>
+      </div>
 
-const CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23li8NuJaGgSulRZ51';
-const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '41d0344ebc20a9480dada875d4329073db564053';
-const REDIRECT_URI = process.env.REDIRECT_URI || 'https://auth-onequantum-developers.onrender.com/callback';
-const PORT = process.env.PORT || 3000;
+      <pre id="output" style="display:none"></pre>
 
-if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-  console.warn('Warning: GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET not found in env. Falling back to provided defaults. For production, set env variables and do not commit secrets.');
-}
+      <p id="back" class="small"><a href="/">Back to home</a></p>
+    </div>
+  </div>
 
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Simple in-memory state store for demo (not for production)
-const stateStore = new Map();
-
-// Start regular OAuth web flow
-app.get('/login', (req, res) => {
-  const state = crypto.randomBytes(16).toString('hex');
-  stateStore.set(state, Date.now());
-  const scope = 'read:user user:email';
-  const authorizeUrl = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`;
-  res.redirect(authorizeUrl);
-});
-
-// OAuth callback (server-side exchange) — keeps existing behavior for server-side flow
-app.get('/callback', async (req, res) => {
-  const { code, state } = req.query;
-  if (!code) {
-    return res.status(400).send('Missing code');
-  }
-  if (!state || !stateStore.has(state)) {
-    console.warn('State missing or unknown:', state);
-    // proceed but warn; in production you should reject
-  } else {
-    stateStore.delete(state);
-  }
-
-  try {
-    const tokenResp = await axios.post(
-      'https://github.com/login/oauth/access_token',
-      {
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        code,
-        redirect_uri: REDIRECT_URI
-      },
-      { headers: { Accept: 'application/json' } }
-    );
-
-    const tokenData = tokenResp.data;
-    if (tokenData.error) {
-      return res.status(400).json(tokenData);
-    }
-    const accessToken = tokenData.access_token;
-    // Fetch user
-    const userResp = await axios.get('https://api.github.com/user', {
-      headers: { Authorization: `token ${accessToken}`, Accept: 'application/json', 'User-Agent': '1Quantum-Auth-Demo' }
-    });
-    const user = userResp.data;
-
-    // Serve a friendly HTML page showing user info (server-side)
-    return res.send(`
-      <!doctype html>
-      <html>
-      <head><meta charset="utf-8"><title>Auth callback</title>
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>
-          body{font-family:system-ui,Arial;padding:24px;background:#f4f6fb}
-          .card{background:#fff;padding:18px;border-radius:8px;max-width:720px;margin:18px auto;box-shadow:0 6px 18px rgba(10,20,40,0.06)}
-          pre{background:#0b1a2b;color:#e6f0ff;padding:8px;border-radius:6px;overflow:auto}
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>Logged in as ${user.login}</h1>
-          <img src="${user.avatar_url}" width="80" style="border-radius:8px"/>
-          <pre>${JSON.stringify(user, null, 2)}</pre>
-          <p>Access token (truncated): ${accessToken ? accessToken.slice(0, 12) + '...' : 'none'}</p>
-          <p><a href="/">Back</a></p>
-        </div>
-      </body>
-      </html>
-    `);
-  } catch (err) {
-    console.error('Callback error', err.response ? err.response.data : err.message);
-    return res.status(500).send('Authentication failed');
-  }
-});
-
-// New endpoint: client-side exchange for static callback page.
-// The static callback page can POST code/state here to complete the exchange server-side.
-app.post('/exchange', async (req, res) => {
-  const { code, state } = req.body;
-  if (!code) return res.status(400).json({ error: 'missing_code' });
-  if (!state || !stateStore.has(state)) {
-    console.warn('State missing or unknown (exchange):', state);
-    // For demo we allow it, but in production reject the request
-  } else {
-    stateStore.delete(state);
-  }
-
-  try {
-    const tokenResp = await axios.post(
-      'https://github.com/login/oauth/access_token',
-      {
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        code,
-        redirect_uri: REDIRECT_URI
-      },
-      { headers: { Accept: 'application/json' } }
-    );
-
-    const tokenData = tokenResp.data;
-    if (tokenData.error) {
-      return res.status(400).json({ error: tokenData.error, details: tokenData });
+  <script>
+    // parse ?a=b&c=d
+    function parseQuery(qs) {
+      const params = {};
+      const q = qs.replace(/^\?/, '');
+      if (!q) return params;
+      for (const part of q.split('&')) {
+        if (!part) continue;
+        const [k, v] = part.split('=');
+        params[decodeURIComponent(k)] = decodeURIComponent(v || '');
+      }
+      return params;
     }
 
-    const accessToken = tokenData.access_token;
-    const userResp = await axios.get('https://api.github.com/user', {
-      headers: { Authorization: `token ${accessToken}`, Accept: 'application/json', 'User-Agent': '1Quantum-Auth-Demo' }
-    });
+    async function finishAuth() {
+      const params = parseQuery(window.location.search);
+      const statusEl = document.getElementById('status');
+      const outputEl = document.getElementById('output');
+      const userEl = document.getElementById('user');
+      const usernameEl = document.getElementById('username');
+      const avatarEl = document.getElementById('avatar');
+      const userinfoEl = document.getElementById('userinfo');
 
-    return res.json({ success: true, tokenData, user: userResp.data });
-  } catch (err) {
-    console.error('Exchange error', err.response ? err.response.data : err.message);
-    return res.status(500).json({ error: 'exchange_failed' });
-  }
-});
+      if (!params.code) {
+        statusEl.innerHTML = '<strong style="color:#b91c1c">Missing "code" in URL.</strong> Make sure the OAuth app callback is configured to this URL.';
+        return;
+      }
 
-// Device flow start (client calls this)
-app.post('/device/start', async (req, res) => {
-  const scope = req.body.scope || 'read:user user:email';
-  try {
-    const resp = await axios.post(
-      'https://github.com/login/device/code',
-      new URLSearchParams({ client_id: CLIENT_ID, scope }).toString(),
-      { headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
-    res.json(resp.data);
-  } catch (err) {
-    console.error('Device/start error', err.response ? err.response.data : err.message);
-    res.status(500).json({ error: 'device_start_failed' });
-  }
-});
+      statusEl.textContent = 'Exchanging code with server...';
 
-// Device flow poll: client repeatedly calls this endpoint with device_code
-app.post('/device/poll', async (req, res) => {
-  const { device_code } = req.body;
-  if (!device_code) return res.status(400).json({ error: 'device_code_required' });
+      try {
+        const resp = await fetch('/exchange', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: params.code, state: params.state })
+        });
 
-  try {
-    const resp = await axios.post(
-      'https://github.com/login/oauth/access_token',
-      new URLSearchParams({
-        client_id: CLIENT_ID,
-        device_code,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
-      }).toString(),
-      { headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
-    const data = resp.data;
-    if (data.access_token) {
-      const userResp = await axios.get('https://api.github.com/user', {
-        headers: { Authorization: `token ${data.access_token}`, Accept: 'application/json', 'User-Agent': '1Quantum-Auth-Demo' }
-      });
-      return res.json({ success: true, tokenData: data, user: userResp.data });
+        const data = await resp.json().catch(() => null);
+
+        if (!resp.ok) {
+          statusEl.innerHTML = '<strong style="color:#b91c1c">Exchange failed</strong>';
+          outputEl.style.display = 'block';
+          outputEl.textContent = JSON.stringify(data || { status: resp.status }, null, 2);
+          return;
+        }
+
+        if (data && data.success && data.user) {
+          statusEl.innerHTML = '<strong style="color:#059669">Authorization complete</strong>';
+          userEl.style.display = 'block';
+          usernameEl.textContent = data.user.login || data.user.name || 'Unknown';
+          avatarEl.src = data.user.avatar_url || '';
+          userinfoEl.textContent = JSON.stringify(data.user, null, 2);
+          outputEl.style.display = 'none';
+        } else {
+          statusEl.innerHTML = '<strong style="color:#b91c1c">Not authorized</strong>';
+          outputEl.style.display = 'block';
+          outputEl.textContent = JSON.stringify(data || {}, null, 2);
+        }
+      } catch (err) {
+        statusEl.innerHTML = '<strong style="color:#b91c1c">Request error</strong>';
+        outputEl.style.display = 'block';
+        outputEl.textContent = String(err);
+      }
     }
-    return res.json({ success: false, data });
-  } catch (err) {
-    console.error('Device/poll error', err.response ? err.response.data : err.message);
-    return res.status(500).json({ error: 'device_poll_failed' });
-  }
-});
 
-app.listen(PORT, () => {
-  console.log(`Auth server listening on port ${PORT}`);
-  console.log(`Web login: http://localhost:${PORT}/login`);
-});
+    // Run on load
+    finishAuth();
+  </script>
+</body>
+</html>
