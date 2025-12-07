@@ -4,6 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 require('dotenv').config();
 
+const rateLimit = require('express-rate-limit');
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -141,8 +143,15 @@ app.post('/device/poll', async (req, res) => {
 // Root
 app.get('/', (req, res) => res.sendFile(path.join(publicDir, 'index.html')));
 
+// Set up rate limiter for fallback static file route
+const fallbackLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests, please try again later.',
+});
+
 // Fallback: prevent client-side route 404s. Do not override API routes above.
-app.get('*', (req, res) => {
+app.get('*', fallbackLimiter, (req, res) => {
   // If it's a known API path, return 404 so client sees an error.
   const apiPrefixes = ['/exchange', '/device', '/login', '/callback-server', '/health'];
   if (apiPrefixes.some(p => req.path.startsWith(p))) return res.status(404).send('Not found');
