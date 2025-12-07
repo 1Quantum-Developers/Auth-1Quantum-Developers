@@ -3,6 +3,7 @@ const axios = require('axios');
 const path = require('path');
 const crypto = require('crypto');
 require('dotenv').config();
+const RateLimit = require('express-rate-limit');
 
 const app = express();
 app.use(express.json());
@@ -12,6 +13,14 @@ const CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23li8NuJaGgSulRZ51';
 const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '41d0344ebc20a9480dada875d4329073db564053';
 const REDIRECT_URI = process.env.REDIRECT_URI || 'https://auth-onequantum-developers.onrender.com/callback';
 const PORT = process.env.PORT || 3000;
+
+// Set up rate limiter for wildcard GET routes (fallback serving index.html)
+const wildcardLimiter = RateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
 
 console.log('Starting server with:', { REDIRECT_URI, PORT });
 
@@ -140,7 +149,7 @@ app.post('/device/poll', async (req, res) => {
 app.get('/', (req, res) => res.sendFile(path.join(publicDir, 'index.html')));
 
 // Fallback: serve index.html for any other GET (prevents 404 on client-side routes or deep links)
-app.get('*', (req, res) => {
+app.get('*', wildcardLimiter, (req, res) => {
   // If it's an API route, let it 404 normally
   if (req.path.startsWith('/api') || req.path.startsWith('/device') || req.path.startsWith('/exchange') || req.path.startsWith('/callback') || req.path.startsWith('/login')) {
     return res.status(404).send('Not found');
