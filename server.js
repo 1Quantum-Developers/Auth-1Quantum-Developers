@@ -141,7 +141,12 @@ app.post('/device/poll', async (req, res) => {
 });
 
 // Root
-app.get('/', (req, res) => res.sendFile(path.join(publicDir, 'index.html')));
+const rootLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests, please try again later.',
+});
+app.get('/', rootLimiter, (req, res) => res.sendFile(path.join(publicDir, 'index.html')));
 
 // Set up rate limiter for fallback static file route
 const fallbackLimiter = rateLimit({
